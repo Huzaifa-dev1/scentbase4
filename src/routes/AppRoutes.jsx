@@ -20,7 +20,7 @@ const Contact = lazy(() => import("../pages/Contact"));
 const AdminLogin = lazy(() => import("../pages/admin/AdminLogin"));
 const Dashboard = lazy(() => import("../pages/admin/Dashboard"));
 const Orders = lazy(() => import("../pages/admin/Orders"));
-const OrderDetails = lazy(() => import("../pages/admin/OrderDetails"));
+
 const ProductsManage = lazy(() => import("../pages/admin/ProductsManage"));
 const DealsManage = lazy(() => import("../pages/admin/DealsManage"));
 
@@ -59,14 +59,6 @@ export default function AppRoutes() {
           }
         />
 
-        <Route
-          path="/admin/orders/:id"
-          element={
-            <ProtectedRoute>
-              <OrderDetails />
-            </ProtectedRoute>
-          }
-        />
 
         <Route
           path="/admin/products"

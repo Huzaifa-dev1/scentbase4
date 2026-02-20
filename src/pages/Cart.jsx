@@ -20,7 +20,11 @@ export default function Cart() {
     return -1; // invalid
   }, [code, totals.subtotal]);
 
-  const deliveryFee = totals.subtotal > 3000 ? 0 : items.length ? 150 : 0;
+  // ✅ Delivery rule:
+  // Above 5000 => Free
+  // Otherwise fixed 190 (only if cart has items)
+  const deliveryFee = totals.subtotal > 5000 ? 0 : items.length ? 190 : 0;
+
   const finalTotal =
     totals.subtotal + deliveryFee - (discount > 0 ? discount : 0);
 

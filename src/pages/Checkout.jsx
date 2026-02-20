@@ -76,10 +76,15 @@ export default function Checkout() {
     note: "",
   });
 
-  // ✅ Fixed standard delivery fee
-  const deliveryFee = items.length ? 160 : 0;
+  // ✅ Delivery rule:
+  // Above 5000 => Free
+  // Otherwise fixed 190 (only if cart has items)
+  const deliveryFee = items.length ? (totals.subtotal > 5000 ? 0 : 190) : 0;
 
-  const finalTotal = useMemo(() => totals.subtotal + deliveryFee, [totals.subtotal, deliveryFee]);
+  const finalTotal = useMemo(
+    () => totals.subtotal + deliveryFee,
+    [totals.subtotal, deliveryFee]
+  );
 
   // Redirect if cart empty (and no slip)
   useEffect(() => {
@@ -433,7 +438,7 @@ export default function Checkout() {
 
           <div className="space-y-2 text-sm">
             <Row label="Subtotal" value={`Rs ${totals.subtotal}`} />
-            <Row label="Delivery (Standard)" value={`Rs ${deliveryFee}`} />
+            <Row label="Delivery (Standard)" value={deliveryFee === 0 ? "Free" : `Rs ${deliveryFee}`} />
             <div className="border-t border-black/10 my-2" />
             <Row label="Final Total" value={`Rs ${finalTotal}`} strong />
           </div>
@@ -491,7 +496,7 @@ export default function Checkout() {
 
                 <div className="space-y-2 text-sm">
                   <Row label="Subtotal" value={`Rs ${totals.subtotal}`} />
-                  <Row label="Delivery (Standard)" value={`Rs ${deliveryFee}`} />
+                  <Row label="Delivery (Standard)" value={deliveryFee === 0 ? "Free" : `Rs ${deliveryFee}`} />
                   <Row label="Final Total" value={`Rs ${finalTotal}`} strong />
                 </div>
               </div>

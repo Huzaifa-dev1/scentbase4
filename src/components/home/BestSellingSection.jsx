@@ -5,19 +5,17 @@ import { listenBestSellers } from "../../firebase/products.service";
 
 export default function BestSellingSection() {
   const [topSelling, setTopSelling] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // listens only (isActive=true AND isBestSeller=true)
+    // Realtime best sellers listener
     const unsub = listenBestSellers((items) => {
-      // show only 3 (same as your previous layout)
-      setTopSelling(items.slice(0, 3));
+      setTopSelling(Array.isArray(items) ? items.slice(0, 3) : []);
+      setLoading(false);
     });
 
     return () => unsub();
   }, []);
-
-  // If no best sellers yet, keep section hidden (no UI mess)
-  if (!topSelling.length) return null;
 
   return (
     <section className="bg-[#0b0b0c]">
@@ -40,11 +38,51 @@ export default function BestSellingSection() {
           </Link>
         </div>
 
-        <div className="mt-7 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {topSelling.map((p) => (
-            <ProductCard key={p.id || p.slug} item={p} />
-          ))}
-        </div>
+        {/* ✅ LOADING STATE (skeleton cards) */}
+        {loading && (
+          <div className="mt-7 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        )}
+
+        {/* ✅ DATA STATE */}
+        {!loading && topSelling.length > 0 && (
+          <div className="mt-7 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {topSelling.map((p) => (
+              <ProductCard key={p.id || p.slug} item={p} />
+            ))}
+          </div>
+        )}
+
+        {/* ✅ EMPTY STATE (still show section, no hiding) */}
+        {!loading && topSelling.length === 0 && (
+          <div className="mt-7 rounded-3xl border border-white/10 bg-white/5 p-6">
+            <p className="text-white font-semibold text-lg">
+              Best sellers will appear here soon ✨
+            </p>
+            <p className="text-white/70 mt-2 text-sm">
+              Go to Admin → Products and mark items as <b>Best Seller</b> to feature them here.
+            </p>
+
+            <div className="mt-4 flex flex-col sm:flex-row gap-3">
+              <Link
+                to="/products"
+                className="inline-flex justify-center rounded-2xl px-5 py-3 text-sm font-medium bg-[#b68a5a] text-black hover:opacity-90 transition"
+              >
+                Browse Products →
+              </Link>
+
+              <Link
+                to="/admin/products"
+                className="inline-flex justify-center rounded-2xl px-5 py-3 text-sm font-medium bg-white/10 border border-white/15 text-white hover:bg-white/15 transition"
+              >
+                Go to Admin →
+              </Link>
+            </div>
+          </div>
+        )}
 
         <div className="mt-6 sm:hidden">
           <Link
@@ -56,5 +94,16 @@ export default function BestSellingSection() {
         </div>
       </div>
     </section>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/5 p-5 animate-pulse">
+      <div className="h-40 rounded-2xl bg-white/10" />
+      <div className="mt-4 h-4 w-3/4 rounded bg-white/10" />
+      <div className="mt-2 h-3 w-1/2 rounded bg-white/10" />
+      <div className="mt-5 h-10 w-full rounded-2xl bg-white/10" />
+    </div>
   );
 }

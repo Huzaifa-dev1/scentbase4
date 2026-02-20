@@ -3,25 +3,14 @@ import PageShell from "../../components/layout/PageShell";
 import toast from "react-hot-toast";
 import { signOut } from "firebase/auth";
 import { auth } from "../../firebase/firebase";
+import { listenOrders, removeOrder, updateOrderStatus } from "../../firebase/orders.service";
 
-const ORDERS_KEY = "scentbase_orders_v1";
 const STATUSES = ["all", "pending", "confirmed", "shipped", "delivered", "cancelled"];
-
-function safeReadOrders() {
-  try {
-    const raw = localStorage.getItem(ORDERS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-function safeWriteOrders(orders) {
-  localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
-}
 
 function fmtDate(ts) {
   try {
+    // Firestore Timestamp support
+    if (ts?.toDate) return ts.toDate().toLocaleString();
     return new Date(ts).toLocaleString();
   } catch {
     return "";
@@ -43,7 +32,7 @@ function downloadOrdersPDF(list) {
         <div class="card">
           <div class="top">
             <div>
-              <div class="title">${o.orderNumber || "-"}</div>
+              <div class="title">${o.orderNumber || o.id || "-"}</div>
               <div class="muted">Created: ${fmtDate(o.createdAt || Date.now())}</div>
               <div class="muted">Status: <b>${String(o.status || "pending").toUpperCase()}</b></div>
             </div>
@@ -114,19 +103,20 @@ export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [status, setStatus] = useState("all");
   const [q, setQ] = useState("");
-  const [openOrder, setOpenOrder] = useState(null); // ✅ modal order
-
-  const loadOrders = () => {
-    const loaded = safeReadOrders();
-    loaded.sort((a, b) => (b?.createdAt || 0) - (a?.createdAt || 0));
-    setOrders(loaded);
-  };
+  const [openOrder, setOpenOrder] = useState(null);
 
   useEffect(() => {
-    loadOrders();
-    const onStorage = () => loadOrders();
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    const unsub = listenOrders((items) => {
+      // ensure newest first even if createdAt not resolved
+      const sorted = [...items].sort((a, b) => {
+        const ta = a?.createdAt?.toMillis ? a.createdAt.toMillis() : (a?.createdAt || 0);
+        const tb = b?.createdAt?.toMillis ? b.createdAt.toMillis() : (b?.createdAt || 0);
+        return tb - ta;
+      });
+      setOrders(sorted);
+    });
+
+    return () => unsub();
   }, []);
 
   const filtered = useMemo(() => {
@@ -137,17 +127,12 @@ export default function Orders() {
       if (!okStatus) return false;
       if (!query) return true;
 
-      const orderNo = String(o.orderNumber || "").toLowerCase();
+      const orderNo = String(o.orderNumber || o.id || "").toLowerCase();
       const name = String(o.customer?.name || "").toLowerCase();
       const phone = String(o.customer?.phone || "").toLowerCase();
       const alt = String(o.customer?.altPhone || "").toLowerCase();
 
-      return (
-        orderNo.includes(query) ||
-        name.includes(query) ||
-        phone.includes(query) ||
-        alt.includes(query)
-      );
+      return orderNo.includes(query) || name.includes(query) || phone.includes(query) || alt.includes(query);
     });
   }, [orders, status, q]);
 
@@ -159,29 +144,30 @@ export default function Orders() {
     return map;
   }, [orders]);
 
-  const updateStatus = (orderNumber, newStatus) => {
-    const updated = orders.map((o) =>
-      String(o.orderNumber) === String(orderNumber) ? { ...o, status: newStatus } : o
-    );
-    updated.sort((a, b) => (b?.createdAt || 0) - (a?.createdAt || 0));
-    setOrders(updated);
-    safeWriteOrders(updated);
+  const updateStatus = async (orderId, newStatus) => {
+    try {
+      await updateOrderStatus(orderId, newStatus);
 
-    // also update open modal view
-    if (openOrder?.orderNumber === orderNumber) {
-      setOpenOrder({ ...openOrder, status: newStatus });
+      // update open modal UI immediately (optimistic)
+      if (openOrder?.id === orderId) setOpenOrder({ ...openOrder, status: newStatus });
+
+      toast.success(`Status updated → ${newStatus}`);
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to update status");
     }
-
-    toast.success(`Status updated → ${newStatus}`);
   };
 
-  const deleteOrder = (orderNumber) => {
-    if (!confirm(`Delete order ${orderNumber}? This cannot be undone.`)) return;
-    const updated = orders.filter((o) => String(o.orderNumber) !== String(orderNumber));
-    setOrders(updated);
-    safeWriteOrders(updated);
-    if (openOrder?.orderNumber === orderNumber) setOpenOrder(null);
-    toast("Order deleted", { icon: "🗑️" });
+  const deleteOrder = async (orderId, orderNumber) => {
+    if (!confirm(`Delete order ${orderNumber || orderId}? This cannot be undone.`)) return;
+    try {
+      await removeOrder(orderId);
+      if (openOrder?.id === orderId) setOpenOrder(null);
+      toast("Order deleted", { icon: "🗑️" });
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to delete order");
+    }
   };
 
   return (
@@ -199,10 +185,7 @@ export default function Orders() {
 
             <div className="flex flex-col sm:flex-row gap-2">
               <button
-                onClick={() => {
-                  loadOrders();
-                  toast.success("Orders refreshed");
-                }}
+                onClick={() => toast.success("Realtime enabled (auto refresh)")}
                 className="rounded-2xl px-4 py-2 text-sm font-medium border border-white/15 text-white hover:bg-white/10 transition"
               >
                 Refresh
@@ -214,23 +197,23 @@ export default function Orders() {
               >
                 Download PDF
               </button>
-             
-             <button onClick={() => signOut(auth)} className="rounded-2xl px-4 py-2 text-sm font-medium border bg-red-700  border-white/15 text-white hover:bg-white/10 transition">
+
+              <button
+                onClick={() => signOut(auth)}
+                className="rounded-2xl px-4 py-2 text-sm font-medium border bg-red-700 border-white/15 text-white hover:bg-white/10 transition"
+              >
                 Sign Out
-             </button>
+              </button>
             </div>
           </div>
 
-          {/* Status chips */}
           <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
             {STATUSES.map((s) => (
               <button
                 key={s}
                 onClick={() => setStatus(s)}
                 className={`rounded-2xl border px-4 py-3 text-left transition ${
-                  status === s
-                    ? "border-[#b68a5a] bg-[#b68a5a]/10"
-                    : "border-white/10 bg-white/5 hover:bg-white/10"
+                  status === s ? "border-[#b68a5a] bg-[#b68a5a]/10" : "border-white/10 bg-white/5 hover:bg-white/10"
                 }`}
               >
                 <p className="text-xs text-white/60 capitalize">{s}</p>
@@ -239,7 +222,6 @@ export default function Orders() {
             ))}
           </div>
 
-          {/* Controls */}
           <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-4">
             <div className="grid gap-3 md:grid-cols-3">
               <div className="md:col-span-2">
@@ -269,7 +251,6 @@ export default function Orders() {
             </div>
           </div>
 
-          {/* Orders list */}
           <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 overflow-hidden">
             <div className="hidden md:grid grid-cols-12 gap-3 px-5 py-3 border-b border-white/10 text-xs text-white/60">
               <div className="col-span-3">Order</div>
@@ -286,11 +267,11 @@ export default function Orders() {
             ) : (
               filtered.map((o) => (
                 <div
-                  key={o.orderNumber}
+                  key={o.id}
                   className="grid md:grid-cols-12 gap-3 px-5 py-5 border-b border-white/10 hover:bg-white/5 transition"
                 >
                   <div className="md:col-span-3">
-                    <p className="text-white font-semibold">{o.orderNumber}</p>
+                    <p className="text-white font-semibold">{o.orderNumber || o.id}</p>
                     <p className="text-xs text-white/50 mt-1">{fmtDate(o.createdAt)}</p>
                     <p className="text-xs text-white/50 mt-1">
                       Items: {o.items?.reduce((s, x) => s + (x.qty || 0), 0) || 0}
@@ -317,7 +298,7 @@ export default function Orders() {
                     <p className="text-xs text-white/60">Update</p>
                     <select
                       value={o.status || "pending"}
-                      onChange={(e) => updateStatus(o.orderNumber, e.target.value)}
+                      onChange={(e) => updateStatus(o.id, e.target.value)}
                       className="mt-2 w-full rounded-2xl bg-black/30 border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:border-white/25"
                     >
                       {STATUSES.filter((s) => s !== "all").map((s) => (
@@ -329,7 +310,6 @@ export default function Orders() {
                   </div>
 
                   <div className="md:col-span-2 flex md:justify-end items-start gap-2">
-                    {/* ✅ Open Order modal (NO ROUTE) */}
                     <button
                       onClick={() => setOpenOrder(o)}
                       className="rounded-2xl px-4 py-2 text-sm font-medium bg-[#b68a5a] text-black hover:opacity-90 transition"
@@ -338,7 +318,7 @@ export default function Orders() {
                     </button>
 
                     <button
-                      onClick={() => deleteOrder(o.orderNumber)}
+                      onClick={() => deleteOrder(o.id, o.orderNumber)}
                       className="rounded-2xl px-4 py-2 text-sm font-medium border border-white/15 text-white hover:bg-white/10 transition"
                     >
                       Delete
@@ -349,7 +329,6 @@ export default function Orders() {
             )}
           </div>
 
-          {/* ✅ Simple order detail popup */}
           {openOrder && (
             <OrderModal
               order={openOrder}
@@ -363,7 +342,6 @@ export default function Orders() {
   );
 }
 
-/** ✅ Simple, clean order detail modal */
 function OrderModal({ order, onClose, onUpdateStatus }) {
   const itemsCount = order.items?.reduce((s, x) => s + (x.qty || 0), 0) || 0;
 
@@ -374,7 +352,7 @@ function OrderModal({ order, onClose, onUpdateStatus }) {
       <div className="w-full max-w-3xl rounded-3xl border border-white/10 bg-[#0b0b0c] shadow-2xl shadow-black/60 overflow-hidden">
         <div className="p-5 border-b border-white/10 flex items-start justify-between gap-4">
           <div>
-            <p className="text-white font-semibold text-lg">{order.orderNumber}</p>
+            <p className="text-white font-semibold text-lg">{order.orderNumber || order.id}</p>
             <p className="text-white/60 text-sm mt-1">
               {fmtDate(order.createdAt)} • {itemsCount} items
             </p>
@@ -415,7 +393,7 @@ function OrderModal({ order, onClose, onUpdateStatus }) {
               <div className="mt-3 space-y-2">
                 {order.items?.map((x) => (
                   <div
-                    key={x.id}
+                    key={x.id || x.name}
                     className="flex items-start justify-between gap-4 rounded-2xl border border-white/10 bg-black/20 p-3"
                   >
                     <div>
@@ -435,12 +413,13 @@ function OrderModal({ order, onClose, onUpdateStatus }) {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <p className="text-white font-semibold">Status</p>
               <p className="text-white/60 text-sm mt-2">
-                Current: <b className="text-white">{String(order.status || "pending").toUpperCase()}</b>
+                Current:{" "}
+                <b className="text-white">{String(order.status || "pending").toUpperCase()}</b>
               </p>
 
               <select
                 value={order.status || "pending"}
-                onChange={(e) => onUpdateStatus(order.orderNumber, e.target.value)}
+                onChange={(e) => onUpdateStatus(order.id, e.target.value)}
                 className="mt-3 w-full rounded-2xl bg-black/30 border border-white/10 px-4 py-3 text-sm text-white focus:outline-none focus:border-white/25"
               >
                 {STATUSES.filter((s) => s !== "all").map((s) => (

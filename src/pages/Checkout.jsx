@@ -4,25 +4,10 @@ import toast from "react-hot-toast";
 import PageShell from "../components/layout/PageShell";
 import { useCart } from "../context/CartContext";
 import { WHATSAPP_NUMBER } from "../data/siteConfig";
-
-const ORDERS_KEY = "scentbase_orders_v1";
+import { createOrder, setOrderNumber } from "../firebase/orders.service";
 
 function pad6(n) {
   return String(n).padStart(6, "0");
-}
-
-// Unique + safe order number (per-day counter)
-function generateOrderNumber() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-
-  const key = `scentbase_order_counter_${yyyy}${mm}${dd}`;
-  const current = Number(localStorage.getItem(key) || "0") + 1;
-  localStorage.setItem(key, String(current));
-
-  return `SB-${yyyy}${mm}${dd}-${pad6(current)}`;
 }
 
 function digitsOnly(v) {
@@ -61,16 +46,23 @@ function formatChangeRequestForWhatsApp(orderNumber) {
   return `Hi ScentBase! I want to update my order details.\nOrder No: ${orderNumber}\nChange needed: (write here)\n`;
 }
 
+// Uses date + last 6 of Firestore doc id => unique across devices
+function buildOrderNumberFromId(orderId) {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+
+  const tail = String(orderId || "").replace(/[^a-zA-Z0-9]/g, "").slice(-6);
+  return `SB-${yyyy}${mm}${dd}-${tail ? tail.toUpperCase() : pad6(Math.floor(Math.random() * 999999))}`;
+}
+
 export default function Checkout() {
   const navigate = useNavigate();
   const { items, totals, clear } = useCart();
 
   const [loading, setLoading] = useState(false);
-
-  // confirmation modal state
   const [showConfirm, setShowConfirm] = useState(false);
-
-  // slip state after order placed
   const [placedOrder, setPlacedOrder] = useState(null);
 
   const [form, setForm] = useState({
@@ -85,30 +77,21 @@ export default function Checkout() {
   // ✅ Fixed standard delivery fee
   const deliveryFee = items.length ? 160 : 0;
 
-  const finalTotal = useMemo(() => {
-    return totals.subtotal + deliveryFee;
-  }, [totals.subtotal, deliveryFee]);
+  const finalTotal = useMemo(() => totals.subtotal + deliveryFee, [totals.subtotal, deliveryFee]);
 
-  // Redirect if cart empty (and no slip)
   useEffect(() => {
     if (!items.length && !placedOrder) navigate("/products");
   }, [items.length, placedOrder, navigate]);
 
-  const onChange = (e) => {
-    setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
-  };
+  const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
 
   const validate = () => {
     if (!form.name.trim()) return "Name is required";
     if (!form.phone.trim()) return "Phone is required (11 digits)";
 
-    if (!isValidPkMobile11(form.phone)) {
-      return "Phone must be 11 digits in format 03XXXXXXXXX";
-    }
-
-    if (form.altPhone.trim() && !isValidPkMobile11(form.altPhone)) {
+    if (!isValidPkMobile11(form.phone)) return "Phone must be 11 digits in format 03XXXXXXXXX";
+    if (form.altPhone.trim() && !isValidPkMobile11(form.altPhone))
       return "Optional number must also be 11 digits (03XXXXXXXXX)";
-    }
 
     if (!form.city.trim()) return "City is required";
     if (!form.address.trim()) return "Address is required";
@@ -116,28 +99,22 @@ export default function Checkout() {
     return "";
   };
 
-  // Step 1: open confirmation modal
   const openConfirmation = () => {
     const err = validate();
     if (err) return toast.error(err);
     setShowConfirm(true);
   };
 
-  // WhatsApp link builders
-  const waLink = (text) =>
-    `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
+  const waLink = (text) => `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
 
-  // Step 2: place order after confirm
+  // ✅ Firestore place order
   const confirmAndPlaceOrder = async () => {
     setLoading(true);
 
     try {
-      const orderNumber = generateOrderNumber();
-
-      const order = {
-        orderNumber,
+      // 1) create order in firestore (without orderNumber initially)
+      const baseOrder = {
         status: "pending",
-        createdAt: Date.now(),
         customer: {
           name: form.name.trim(),
           phone: digitsOnly(form.phone),
@@ -161,29 +138,34 @@ export default function Checkout() {
         paymentMethod: "COD",
       };
 
-      // save locally for now (Admin dashboard reads from here until Firebase)
-      const existing = JSON.parse(localStorage.getItem(ORDERS_KEY) || "[]");
-      localStorage.setItem(ORDERS_KEY, JSON.stringify([order, ...existing]));
+      const orderId = await createOrder(baseOrder);
 
-      // close modal + clear cart
+      // 2) build unique orderNumber based on doc id, then update the doc
+      const orderNumber = buildOrderNumberFromId(orderId);
+      await setOrderNumber(orderId, orderNumber);
+
+      // 3) create final object for slip screen
+      const finalOrderForSlip = {
+        id: orderId,
+        orderNumber,
+        ...baseOrder,
+        createdAt: Date.now(), // for slip display only (server timestamp is in Firestore)
+      };
+
       setShowConfirm(false);
       clear();
-
-      // show slip
-      setPlacedOrder(order);
+      setPlacedOrder(finalOrderForSlip);
 
       toast.success(`Order confirmed! ${orderNumber}`);
     } catch (e) {
+      console.error(e);
       toast.error("Failed to place order. Try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Print / Save slip (user can Save as PDF)
-  const printSlip = () => {
-    window.print();
-  };
+  const printSlip = () => window.print();
 
   const copyOrderNo = async () => {
     if (!placedOrder?.orderNumber) return;
@@ -191,7 +173,6 @@ export default function Checkout() {
     toast.success("Order number copied!");
   };
 
-  // If order placed -> show slip screen
   if (placedOrder) {
     const orderMsg = formatOrderForWhatsApp(placedOrder);
     const changeMsg = formatChangeRequestForWhatsApp(placedOrder.orderNumber);
@@ -229,13 +210,10 @@ export default function Checkout() {
           </div>
 
           <div className="mt-6 grid gap-6 lg:grid-cols-3">
-            {/* Left: Order + Customer */}
             <div className="lg:col-span-2 space-y-4">
               <div className="rounded-3xl border border-black/10 p-5">
                 <p className="text-sm text-black/60">Order Number</p>
-                <p className="text-xl font-semibold text-black mt-1">
-                  {placedOrder.orderNumber}
-                </p>
+                <p className="text-xl font-semibold text-black mt-1">{placedOrder.orderNumber}</p>
                 <p className="text-xs text-black/50 mt-2">
                   Status: <b className="text-black">Pending</b> (Admin will confirm)
                 </p>
@@ -247,10 +225,7 @@ export default function Checkout() {
                 <div className="mt-3 grid gap-2 text-sm">
                   <Info label="Name" value={placedOrder.customer.name} />
                   <Info label="Phone" value={placedOrder.customer.phone} />
-                  <Info
-                    label="Optional Phone"
-                    value={placedOrder.customer.altPhone || "—"}
-                  />
+                  <Info label="Optional Phone" value={placedOrder.customer.altPhone || "—"} />
                   <Info label="City" value={placedOrder.customer.city} />
                   <Info label="Address" value={placedOrder.customer.address} />
                   <Info label="Note" value={placedOrder.customer.note || "—"} />
@@ -278,16 +253,12 @@ export default function Checkout() {
               </div>
             </div>
 
-            {/* Right: Items + Pricing */}
             <div className="rounded-3xl border border-black/10 p-5 h-fit">
               <p className="text-lg font-semibold text-black">Order Summary</p>
 
               <div className="mt-4 space-y-3">
                 {placedOrder.items.map((x) => (
-                  <div
-                    key={x.id}
-                    className="flex items-start justify-between gap-3 text-sm"
-                  >
+                  <div key={x.id} className="flex items-start justify-between gap-3 text-sm">
                     <div>
                       <p className="text-black font-medium">{x.name}</p>
                       <p className="text-black/60 text-xs">Qty: {x.qty}</p>
@@ -329,7 +300,6 @@ export default function Checkout() {
     );
   }
 
-  // Normal checkout screen (before placing)
   return (
     <PageShell>
       <div className="flex items-start justify-between gap-4">
@@ -349,18 +319,12 @@ export default function Checkout() {
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-3">
-        {/* Form */}
         <div className="lg:col-span-2 rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-black">Delivery Details</h2>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
-            <Input
-              label="Full Name"
-              name="name"
-              value={form.name}
-              onChange={onChange}
-              placeholder="Your name"
-            />
+            <Input label="Full Name" name="name" value={form.name} onChange={onChange} placeholder="Your name" />
+
             <Input
               label="Phone (11 digits)"
               name="phone"
@@ -369,6 +333,7 @@ export default function Checkout() {
               placeholder="03XXXXXXXXX"
               hint="Format: 03XXXXXXXXX (11 digits)"
             />
+
             <Input
               label="Optional Phone (11 digits)"
               name="altPhone"
@@ -377,13 +342,9 @@ export default function Checkout() {
               placeholder="03XXXXXXXXX"
               hint="Optional backup number"
             />
-            <Input
-              label="City"
-              name="city"
-              value={form.city}
-              onChange={onChange}
-              placeholder="Lahore"
-            />
+
+            <Input label="City" name="city" value={form.city} onChange={onChange} placeholder="Lahore" />
+
             <div className="sm:col-span-2">
               <Input
                 label="Address"
@@ -395,9 +356,7 @@ export default function Checkout() {
             </div>
 
             <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-black">
-                Note (optional)
-              </label>
+              <label className="text-sm font-medium text-black">Note (optional)</label>
               <textarea
                 name="note"
                 value={form.note}
@@ -435,16 +394,12 @@ export default function Checkout() {
           </p>
         </div>
 
-        {/* Summary */}
         <div className="rounded-3xl border border-black/10 bg-white p-6 h-fit shadow-sm">
           <h2 className="text-lg font-semibold text-black">Order Summary</h2>
 
           <div className="mt-4 space-y-3">
             {items.map((x) => (
-              <div
-                key={x.id}
-                className="flex items-start justify-between gap-3 text-sm"
-              >
+              <div key={x.id} className="flex items-start justify-between gap-3 text-sm">
                 <div>
                   <p className="text-black font-medium">{x.name}</p>
                   <p className="text-black/60 text-xs">Qty: {x.qty}</p>
@@ -469,7 +424,6 @@ export default function Checkout() {
         </div>
       </div>
 
-      {/* Confirmation Modal */}
       {showConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50">
           <div className="w-full max-w-2xl rounded-3xl bg-white border border-black/10 shadow-xl overflow-hidden">
@@ -491,7 +445,10 @@ export default function Checkout() {
                 <div className="mt-3 space-y-2 text-sm">
                   <Info label="Name" value={form.name.trim()} />
                   <Info label="Phone" value={digitsOnly(form.phone)} />
-                  <Info label="Optional Phone" value={form.altPhone.trim() ? digitsOnly(form.altPhone) : "—"} />
+                  <Info
+                    label="Optional Phone"
+                    value={form.altPhone.trim() ? digitsOnly(form.altPhone) : "—"}
+                  />
                   <Info label="City" value={form.city.trim()} />
                   <Info label="Address" value={form.address.trim()} />
                   <Info label="Note" value={form.note.trim() || "—"} />

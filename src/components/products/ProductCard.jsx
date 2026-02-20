@@ -11,7 +11,22 @@ export default function ProductCard({ item, onView, compact = false }) {
     item.family || `${item.size || "100ml"} • ${item.category || "Perfume"}`;
 
   const priceNum = Number(String(item.price ?? 0).replaceAll(",", ""));
-  const actualNum = Number(String(item.actual ?? item.price ?? 0).replaceAll(",", ""));
+
+  // 🔥 Stable 400–500 offset
+  function stableOffset(seed) {
+    const s = String(seed || "x");
+    let hash = 0;
+    for (let i = 0; i < s.length; i++) {
+      hash = s.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return 400 + (Math.abs(hash) % 101);
+  }
+
+  const firebaseActual = Number(String(item.actual ?? 0).replaceAll(",", ""));
+  const actualNum =
+    firebaseActual && firebaseActual > priceNum
+      ? firebaseActual
+      : priceNum + stableOffset(productId);
 
   const cartItem = {
     id: productId,
@@ -58,16 +73,14 @@ export default function ProductCard({ item, onView, compact = false }) {
         <p className="text-sm text-white/50">{family}</p>
         <h3 className="font-semibold text-lg text-white mt-1">{item.name}</h3>
 
-        <div className="mt-2 flex items-center justify-between">
-          {actualNum > priceNum ? (
-            <p className="text-xs text-white/40 line-through">
-              Rs {actualNum.toLocaleString()}
-            </p>
-          ) : (
-            <span />
-          )}
-          <p className="text-base font-semibold text-[#b68a5a]">
+        {/* ✅ Improved Price Section */}
+        <div className="mt-3 flex items-end gap-3">
+          <p className="text-2xl font-bold text-[#b68a5a]">
             Rs {priceNum.toLocaleString()}
+          </p>
+
+          <p className="text-base text-white/40 line-through mb-[3px]">
+            Rs {actualNum.toLocaleString()}
           </p>
         </div>
 

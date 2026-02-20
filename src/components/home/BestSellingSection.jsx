@@ -38,7 +38,7 @@ const BEST_SELLING = [
   },
   {
     id: "best-tobbaco",
-    slug: "tobbaco",
+    slug: "",
     name: "Tobbaco",
     price: 2500,
     actual: 3200,
@@ -47,6 +47,7 @@ const BEST_SELLING = [
     isActive: true,
     isBestSeller: true,
   },
+  
 ];
 
 export default function BestSellingSection() {

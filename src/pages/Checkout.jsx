@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
+
 import PageShell from "../components/layout/PageShell";
 import { useCart } from "../context/CartContext";
 import { WHATSAPP_NUMBER } from "../data/siteConfig";
-import { createOrder, setOrderNumber } from "../firebase/orders.service";
 
-function pad6(n) {
-  return String(n).padStart(6, "0");
-}
+// ✅ Must exist in: src/firebase/orders.service.js
+import { createOrderOneStep } from "../firebase/orders.service";
 
+// -------------------------
+// Helpers
+// -------------------------
 function digitsOnly(v) {
   return String(v || "").replace(/\D/g, "");
 }
@@ -18,6 +20,10 @@ function digitsOnly(v) {
 function isValidPkMobile11(v) {
   const d = digitsOnly(v);
   return d.length === 11 && d.startsWith("03");
+}
+
+function waLink(text) {
+  return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
 }
 
 function formatOrderForWhatsApp(order) {
@@ -33,7 +39,7 @@ function formatOrderForWhatsApp(order) {
   lines.push(`--------------------`);
   lines.push(`Items:`);
   order.items.forEach((x) => {
-    lines.push(`• ${x.name} x${x.qty} = Rs ${x.price * x.qty}`);
+    lines.push(`• ${x.name} x${x.qty} = Rs ${Number(x.price) * Number(x.qty)}`);
   });
   lines.push(`--------------------`);
   lines.push(`Subtotal: Rs ${order.pricing.subtotal}`);
@@ -46,23 +52,19 @@ function formatChangeRequestForWhatsApp(orderNumber) {
   return `Hi ScentBase! I want to update my order details.\nOrder No: ${orderNumber}\nChange needed: (write here)\n`;
 }
 
-// Uses date + last 6 of Firestore doc id => unique across devices
-function buildOrderNumberFromId(orderId) {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-
-  const tail = String(orderId || "").replace(/[^a-zA-Z0-9]/g, "").slice(-6);
-  return `SB-${yyyy}${mm}${dd}-${tail ? tail.toUpperCase() : pad6(Math.floor(Math.random() * 999999))}`;
-}
-
+// -------------------------
+// Component
+// -------------------------
 export default function Checkout() {
   const navigate = useNavigate();
   const { items, totals, clear } = useCart();
 
   const [loading, setLoading] = useState(false);
+
+  // confirmation modal
   const [showConfirm, setShowConfirm] = useState(false);
+
+  // slip after order placed
   const [placedOrder, setPlacedOrder] = useState(null);
 
   const [form, setForm] = useState({
@@ -79,19 +81,26 @@ export default function Checkout() {
 
   const finalTotal = useMemo(() => totals.subtotal + deliveryFee, [totals.subtotal, deliveryFee]);
 
+  // Redirect if cart empty (and no slip)
   useEffect(() => {
     if (!items.length && !placedOrder) navigate("/products");
   }, [items.length, placedOrder, navigate]);
 
-  const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
+  const onChange = (e) => {
+    setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
+  };
 
   const validate = () => {
     if (!form.name.trim()) return "Name is required";
     if (!form.phone.trim()) return "Phone is required (11 digits)";
 
-    if (!isValidPkMobile11(form.phone)) return "Phone must be 11 digits in format 03XXXXXXXXX";
-    if (form.altPhone.trim() && !isValidPkMobile11(form.altPhone))
+    if (!isValidPkMobile11(form.phone)) {
+      return "Phone must be 11 digits in format 03XXXXXXXXX";
+    }
+
+    if (form.altPhone.trim() && !isValidPkMobile11(form.altPhone)) {
       return "Optional number must also be 11 digits (03XXXXXXXXX)";
+    }
 
     if (!form.city.trim()) return "City is required";
     if (!form.address.trim()) return "Address is required";
@@ -99,22 +108,25 @@ export default function Checkout() {
     return "";
   };
 
+  // Step 1: open confirmation modal
   const openConfirmation = () => {
     const err = validate();
     if (err) return toast.error(err);
     setShowConfirm(true);
   };
 
-  const waLink = (text) => `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
-
-  // ✅ Firestore place order
+  // ✅ Step 2: confirm & place order (Firestore one-step write)
   const confirmAndPlaceOrder = async () => {
+    const err = validate();
+    if (err) return toast.error(err);
+
     setLoading(true);
 
     try {
-      // 1) create order in firestore (without orderNumber initially)
-      const baseOrder = {
+      // build payload for Firestore
+      const payload = {
         status: "pending",
+        paymentMethod: "COD",
         customer: {
           name: form.name.trim(),
           phone: digitsOnly(form.phone),
@@ -126,39 +138,35 @@ export default function Checkout() {
         items: items.map((x) => ({
           id: x.id,
           name: x.name,
-          price: x.price,
-          qty: x.qty,
+          price: Number(x.price),
+          qty: Number(x.qty),
           image: x.image || "",
         })),
         pricing: {
-          subtotal: totals.subtotal,
-          delivery: deliveryFee,
-          total: finalTotal,
+          subtotal: Number(totals.subtotal),
+          delivery: Number(deliveryFee),
+          total: Number(finalTotal),
         },
-        paymentMethod: "COD",
       };
 
-      const orderId = await createOrder(baseOrder);
+      // ✅ ONE step create (no update after)
+      const { id, orderNumber } = await createOrderOneStep(payload);
 
-      // 2) build unique orderNumber based on doc id, then update the doc
-      const orderNumber = buildOrderNumberFromId(orderId);
-      await setOrderNumber(orderId, orderNumber);
-
-      // 3) create final object for slip screen
-      const finalOrderForSlip = {
-        id: orderId,
-        orderNumber,
-        ...baseOrder,
-        createdAt: Date.now(), // for slip display only (server timestamp is in Firestore)
-      };
-
+      // close modal + clear cart
       setShowConfirm(false);
       clear();
-      setPlacedOrder(finalOrderForSlip);
+
+      // slip data (UI-only createdAt for display)
+      setPlacedOrder({
+        id,
+        orderNumber,
+        ...payload,
+        createdAt: Date.now(),
+      });
 
       toast.success(`Order confirmed! ${orderNumber}`);
     } catch (e) {
-      console.error(e);
+      console.error("Order failed:", e);
       toast.error("Failed to place order. Try again.");
     } finally {
       setLoading(false);
@@ -169,10 +177,17 @@ export default function Checkout() {
 
   const copyOrderNo = async () => {
     if (!placedOrder?.orderNumber) return;
-    await navigator.clipboard.writeText(placedOrder.orderNumber);
-    toast.success("Order number copied!");
+    try {
+      await navigator.clipboard.writeText(placedOrder.orderNumber);
+      toast.success("Order number copied!");
+    } catch {
+      toast.error("Copy failed (browser restriction)");
+    }
   };
 
+  // -------------------------
+  // Slip screen
+  // -------------------------
   if (placedOrder) {
     const orderMsg = formatOrderForWhatsApp(placedOrder);
     const changeMsg = formatChangeRequestForWhatsApp(placedOrder.orderNumber);
@@ -210,6 +225,7 @@ export default function Checkout() {
           </div>
 
           <div className="mt-6 grid gap-6 lg:grid-cols-3">
+            {/* Left */}
             <div className="lg:col-span-2 space-y-4">
               <div className="rounded-3xl border border-black/10 p-5">
                 <p className="text-sm text-black/60">Order Number</p>
@@ -253,6 +269,7 @@ export default function Checkout() {
               </div>
             </div>
 
+            {/* Right */}
             <div className="rounded-3xl border border-black/10 p-5 h-fit">
               <p className="text-lg font-semibold text-black">Order Summary</p>
 
@@ -263,7 +280,7 @@ export default function Checkout() {
                       <p className="text-black font-medium">{x.name}</p>
                       <p className="text-black/60 text-xs">Qty: {x.qty}</p>
                     </div>
-                    <p className="text-black/80">Rs {x.price * x.qty}</p>
+                    <p className="text-black/80">Rs {Number(x.price) * Number(x.qty)}</p>
                   </div>
                 ))}
               </div>
@@ -300,6 +317,9 @@ export default function Checkout() {
     );
   }
 
+  // -------------------------
+  // Checkout screen
+  // -------------------------
   return (
     <PageShell>
       <div className="flex items-start justify-between gap-4">
@@ -319,6 +339,7 @@ export default function Checkout() {
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-3">
+        {/* Form */}
         <div className="lg:col-span-2 rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-black">Delivery Details</h2>
 
@@ -378,9 +399,7 @@ export default function Checkout() {
             </button>
 
             <a
-              href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
-                "Hi ScentBase! I want to place an order (COD)."
-              )}`}
+              href={waLink("Hi ScentBase! I want to place an order (COD).")}
               target="_blank"
               rel="noreferrer"
               className="rounded-2xl px-6 py-3 text-sm font-medium border border-black/10 text-black hover:bg-black/5 transition text-center"
@@ -394,6 +413,7 @@ export default function Checkout() {
           </p>
         </div>
 
+        {/* Summary */}
         <div className="rounded-3xl border border-black/10 bg-white p-6 h-fit shadow-sm">
           <h2 className="text-lg font-semibold text-black">Order Summary</h2>
 
@@ -404,7 +424,7 @@ export default function Checkout() {
                   <p className="text-black font-medium">{x.name}</p>
                   <p className="text-black/60 text-xs">Qty: {x.qty}</p>
                 </div>
-                <p className="text-black/80">Rs {x.price * x.qty}</p>
+                <p className="text-black/80">Rs {Number(x.price) * Number(x.qty)}</p>
               </div>
             ))}
           </div>
@@ -424,6 +444,7 @@ export default function Checkout() {
         </div>
       </div>
 
+      {/* Confirmation Modal */}
       {showConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50">
           <div className="w-full max-w-2xl rounded-3xl bg-white border border-black/10 shadow-xl overflow-hidden">
@@ -460,10 +481,8 @@ export default function Checkout() {
                 <div className="mt-3 space-y-2 text-sm max-h-44 overflow-auto pr-1">
                   {items.map((x) => (
                     <div key={x.id} className="flex justify-between gap-3">
-                      <span className="text-black/80">
-                        {x.name} x{x.qty}
-                      </span>
-                      <span className="text-black">Rs {x.price * x.qty}</span>
+                      <span className="text-black/80">{x.name} x{x.qty}</span>
+                      <span className="text-black">Rs {Number(x.price) * Number(x.qty)}</span>
                     </div>
                   ))}
                 </div>
@@ -502,6 +521,9 @@ export default function Checkout() {
   );
 }
 
+// -------------------------
+// UI pieces
+// -------------------------
 function Input({ label, hint, ...props }) {
   return (
     <div>
@@ -519,9 +541,7 @@ function Row({ label, value, strong }) {
   return (
     <div className="flex items-center justify-between">
       <p className="text-black/60">{label}</p>
-      <p className={strong ? "text-black font-semibold" : "text-black/80"}>
-        {value}
-      </p>
+      <p className={strong ? "text-black font-semibold" : "text-black/80"}>{value}</p>
     </div>
   );
 }

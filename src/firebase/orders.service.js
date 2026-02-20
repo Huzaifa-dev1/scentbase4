@@ -1,4 +1,3 @@
-// src/firebase/orders.service.js
 import {
   collection,
   doc,
@@ -14,7 +13,6 @@ import { db } from "./firebase";
 
 const colRef = collection(db, "orders");
 
-// Admin: realtime orders
 export function listenOrders(cb) {
   const q = query(colRef, orderBy("createdAt", "desc"));
   return onSnapshot(q, (snap) => {
@@ -32,7 +30,7 @@ function buildOrderNumberFromId(orderId) {
   return `SB-${yyyy}${mm}${dd}-${tail}`;
 }
 
-// ✅ One-step create (no update needed)
+// ✅ ONE STEP ORDER CREATE (NO UPDATE)
 export async function createOrderOneStep(payload) {
   const ref = doc(colRef); // generates id client-side
   const orderNumber = buildOrderNumberFromId(ref.id);
@@ -47,13 +45,11 @@ export async function createOrderOneStep(payload) {
   return { id: ref.id, orderNumber };
 }
 
-// Admin: update status (optional)
 export async function updateOrderStatus(orderId, status) {
   const ref = doc(db, "orders", orderId);
   return updateDoc(ref, { status, updatedAt: serverTimestamp() });
 }
 
-// Admin: delete order
 export async function removeOrder(orderId) {
   const ref = doc(db, "orders", orderId);
   return deleteDoc(ref);

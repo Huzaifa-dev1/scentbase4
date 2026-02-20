@@ -1,20 +1,20 @@
 // src/firebase/orders.service.js
 import {
-  addDoc,
   collection,
-  deleteDoc,
   doc,
+  setDoc,
+  deleteDoc,
+  updateDoc,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
-  updateDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
 
 const colRef = collection(db, "orders");
 
-// Admin: realtime orders (latest first)
+// Admin: realtime orders
 export function listenOrders(cb) {
   const q = query(colRef, orderBy("createdAt", "desc"));
   return onSnapshot(q, (snap) => {
@@ -23,23 +23,31 @@ export function listenOrders(cb) {
   });
 }
 
-// Checkout: create order (returns doc id)
-export async function createOrder(payload) {
-  const ref = await addDoc(colRef, {
+function buildOrderNumberFromId(orderId) {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const tail = String(orderId).slice(-6).toUpperCase();
+  return `SB-${yyyy}${mm}${dd}-${tail}`;
+}
+
+// ✅ One-step create (no update needed)
+export async function createOrderOneStep(payload) {
+  const ref = doc(colRef); // generates id client-side
+  const orderNumber = buildOrderNumberFromId(ref.id);
+
+  await setDoc(ref, {
     ...payload,
+    orderNumber,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
-  return ref.id;
+
+  return { id: ref.id, orderNumber };
 }
 
-// After create: set orderNumber using doc id (avoids duplicates)
-export async function setOrderNumber(orderId, orderNumber) {
-  const ref = doc(db, "orders", orderId);
-  return updateDoc(ref, { orderNumber, updatedAt: serverTimestamp() });
-}
-
-// Admin: update status
+// Admin: update status (optional)
 export async function updateOrderStatus(orderId, status) {
   const ref = doc(db, "orders", orderId);
   return updateDoc(ref, { status, updatedAt: serverTimestamp() });

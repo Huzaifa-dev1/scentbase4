@@ -8,7 +8,7 @@ export default function ProductCard({ item, onView, compact = false }) {
   const image = item.imageUrl || item.image || "/hero.jpg";
   const tag = item.isBestSeller ? "Best Seller" : item.tag || "Perfume";
   const family =
-    item.family || `${item.size || "100ml"} • ${item.category || "Perfume"}`;
+    item.family || `${item.size || "50ml"} • ${item.category || "Perfume"}`;
 
   const priceNum = Number(String(item.price ?? 0).replaceAll(",", ""));
 

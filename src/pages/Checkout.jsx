@@ -5,8 +5,6 @@ import toast from "react-hot-toast";
 import PageShell from "../components/layout/PageShell";
 import { useCart } from "../context/CartContext";
 import { WHATSAPP_NUMBER } from "../data/siteConfig";
-
-// ✅ Must exist in: src/firebase/orders.service.js
 import { createOrderOneStep } from "../firebase/orders.service";
 
 // -------------------------
@@ -16,7 +14,6 @@ function digitsOnly(v) {
   return String(v || "").replace(/\D/g, "");
 }
 
-// Strict 11-digit Pak number rule: 03XXXXXXXXX
 function isValidPkMobile11(v) {
   const d = digitsOnly(v);
   return d.length === 11 && d.startsWith("03");
@@ -60,11 +57,7 @@ export default function Checkout() {
   const { items, totals, clear } = useCart();
 
   const [loading, setLoading] = useState(false);
-
-  // confirmation modal
   const [showConfirm, setShowConfirm] = useState(false);
-
-  // slip after order placed
   const [placedOrder, setPlacedOrder] = useState(null);
 
   const [form, setForm] = useState({
@@ -76,9 +69,6 @@ export default function Checkout() {
     note: "",
   });
 
-  // ✅ Delivery rule:
-  // Above 5000 => Free
-  // Otherwise fixed 190 (only if cart has items)
   const deliveryFee = items.length ? (totals.subtotal > 5000 ? 0 : 190) : 0;
 
   const finalTotal = useMemo(
@@ -86,7 +76,6 @@ export default function Checkout() {
     [totals.subtotal, deliveryFee]
   );
 
-  // Redirect if cart empty (and no slip)
   useEffect(() => {
     if (!items.length && !placedOrder) navigate("/products");
   }, [items.length, placedOrder, navigate]);
@@ -113,14 +102,12 @@ export default function Checkout() {
     return "";
   };
 
-  // Step 1: open confirmation modal
   const openConfirmation = () => {
     const err = validate();
     if (err) return toast.error(err);
     setShowConfirm(true);
   };
 
-  // ✅ Step 2: confirm & place order (Firestore one-step write)
   const confirmAndPlaceOrder = async () => {
     const err = validate();
     if (err) return toast.error(err);
@@ -128,7 +115,6 @@ export default function Checkout() {
     setLoading(true);
 
     try {
-      // build payload for Firestore
       const payload = {
         status: "pending",
         paymentMethod: "COD",
@@ -154,14 +140,11 @@ export default function Checkout() {
         },
       };
 
-      // ✅ ONE step create (no update after)
       const { id, orderNumber } = await createOrderOneStep(payload);
 
-      // close modal + clear cart
       setShowConfirm(false);
       clear();
 
-      // slip data (UI-only createdAt for display)
       setPlacedOrder({
         id,
         orderNumber,
@@ -190,16 +173,13 @@ export default function Checkout() {
     }
   };
 
-  // -------------------------
-  // Slip screen
-  // -------------------------
   if (placedOrder) {
     const orderMsg = formatOrderForWhatsApp(placedOrder);
     const changeMsg = formatChangeRequestForWhatsApp(placedOrder.orderNumber);
 
     return (
       <PageShell>
-        <div className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm print:shadow-none print:border-black/20">
+        <div className="rounded-3xl border border-black/10 bg-white p-4 sm:p-6 shadow-sm print:shadow-none print:border-black/20">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div>
               <p className="text-xs font-medium inline-flex px-3 py-1 rounded-full bg-black text-white">
@@ -208,7 +188,7 @@ export default function Checkout() {
               <h1 className="text-2xl sm:text-3xl font-semibold text-black mt-3">
                 Confirmation Slip
               </h1>
-              <p className="text-black/60 mt-2">
+              <p className="text-black/60 mt-2 text-sm sm:text-base">
                 Save this slip for your record. You can print or save as PDF.
               </p>
             </div>
@@ -230,7 +210,6 @@ export default function Checkout() {
           </div>
 
           <div className="mt-6 grid gap-6 lg:grid-cols-3">
-            {/* Left */}
             <div className="lg:col-span-2 space-y-4">
               <div className="rounded-3xl border border-black/10 p-5">
                 <p className="text-sm text-black/60">Order Number</p>
@@ -243,13 +222,21 @@ export default function Checkout() {
               <div className="rounded-3xl border border-black/10 p-5">
                 <p className="text-lg font-semibold text-black">Customer Details</p>
 
-                <div className="mt-3 grid gap-2 text-sm">
-                  <Info label="Name" value={placedOrder.customer.name} />
-                  <Info label="Phone" value={placedOrder.customer.phone} />
-                  <Info label="Optional Phone" value={placedOrder.customer.altPhone || "—"} />
-                  <Info label="City" value={placedOrder.customer.city} />
-                  <Info label="Address" value={placedOrder.customer.address} />
-                  <Info label="Note" value={placedOrder.customer.note || "—"} />
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <InfoCard label="Name" value={placedOrder.customer.name} />
+                  <InfoCard label="Phone" value={placedOrder.customer.phone} />
+                  {placedOrder.customer.altPhone ? (
+                    <InfoCard label="Optional Phone" value={placedOrder.customer.altPhone} />
+                  ) : null}
+                  <InfoCard label="City" value={placedOrder.customer.city} />
+                  <div className="sm:col-span-2">
+                    <InfoCard label="Address" value={placedOrder.customer.address} />
+                  </div>
+                  {placedOrder.customer.note ? (
+                    <div className="sm:col-span-2">
+                      <InfoCard label="Note" value={placedOrder.customer.note} />
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="mt-4 flex flex-col sm:flex-row gap-2 print:hidden">
@@ -274,18 +261,19 @@ export default function Checkout() {
               </div>
             </div>
 
-            {/* Right */}
             <div className="rounded-3xl border border-black/10 p-5 h-fit">
               <p className="text-lg font-semibold text-black">Order Summary</p>
 
               <div className="mt-4 space-y-3">
                 {placedOrder.items.map((x) => (
                   <div key={x.id} className="flex items-start justify-between gap-3 text-sm">
-                    <div>
-                      <p className="text-black font-medium">{x.name}</p>
+                    <div className="min-w-0">
+                      <p className="text-black font-medium break-words">{x.name}</p>
                       <p className="text-black/60 text-xs">Qty: {x.qty}</p>
                     </div>
-                    <p className="text-black/80">Rs {Number(x.price) * Number(x.qty)}</p>
+                    <p className="text-black/80 whitespace-nowrap">
+                      Rs {Number(x.price) * Number(x.qty)}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -294,7 +282,10 @@ export default function Checkout() {
 
               <div className="space-y-2 text-sm">
                 <Row label="Subtotal" value={`Rs ${placedOrder.pricing.subtotal}`} />
-                <Row label="Delivery (Standard)" value={`Rs ${placedOrder.pricing.delivery}`} />
+                <Row
+                  label="Delivery (Standard)"
+                  value={placedOrder.pricing.delivery === 0 ? "Free" : `Rs ${placedOrder.pricing.delivery}`}
+                />
                 <div className="border-t border-black/10 my-2" />
                 <Row label="Final Total" value={`Rs ${placedOrder.pricing.total}`} strong />
               </div>
@@ -322,9 +313,6 @@ export default function Checkout() {
     );
   }
 
-  // -------------------------
-  // Checkout screen
-  // -------------------------
   return (
     <PageShell>
       <div className="flex items-start justify-between gap-4">
@@ -344,7 +332,6 @@ export default function Checkout() {
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-3">
-        {/* Form */}
         <div className="lg:col-span-2 rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-black">Delivery Details</h2>
 
@@ -418,18 +405,19 @@ export default function Checkout() {
           </p>
         </div>
 
-        {/* Summary */}
         <div className="rounded-3xl border border-black/10 bg-white p-6 h-fit shadow-sm">
           <h2 className="text-lg font-semibold text-black">Order Summary</h2>
 
           <div className="mt-4 space-y-3">
             {items.map((x) => (
               <div key={x.id} className="flex items-start justify-between gap-3 text-sm">
-                <div>
-                  <p className="text-black font-medium">{x.name}</p>
+                <div className="min-w-0">
+                  <p className="text-black font-medium break-words">{x.name}</p>
                   <p className="text-black/60 text-xs">Qty: {x.qty}</p>
                 </div>
-                <p className="text-black/80">Rs {Number(x.price) * Number(x.qty)}</p>
+                <p className="text-black/80 whitespace-nowrap">
+                  Rs {Number(x.price) * Number(x.qty)}
+                </p>
               </div>
             ))}
           </div>
@@ -449,75 +437,89 @@ export default function Checkout() {
         </div>
       </div>
 
-      {/* Confirmation Modal */}
       {showConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50">
-          <div className="w-full max-w-2xl rounded-3xl bg-white border border-black/10 shadow-xl overflow-hidden">
-            <div className="p-5 border-b border-black/10">
-              <p className="text-xs font-medium inline-flex px-3 py-1 rounded-full bg-black text-white">
-                Confirm Order
-              </p>
-              <h3 className="text-xl font-semibold text-black mt-3">
-                Please double-check your details
-              </h3>
-              <p className="text-sm text-black/60 mt-1">
-                Once confirmed, your order number will be generated.
-              </p>
-            </div>
-
-            <div className="p-5 grid gap-4 lg:grid-cols-2">
-              <div className="rounded-2xl border border-black/10 p-4">
-                <p className="font-semibold text-black">Delivery Info</p>
-                <div className="mt-3 space-y-2 text-sm">
-                  <Info label="Name" value={form.name.trim()} />
-                  <Info label="Phone" value={digitsOnly(form.phone)} />
-                  <Info
-                    label="Optional Phone"
-                    value={form.altPhone.trim() ? digitsOnly(form.altPhone) : "—"}
-                  />
-                  <Info label="City" value={form.city.trim()} />
-                  <Info label="Address" value={form.address.trim()} />
-                  <Info label="Note" value={form.note.trim() || "—"} />
-                </div>
+        <div className="fixed inset-0 z-50 bg-black/50">
+          <div className="flex h-[100dvh] w-full items-end sm:items-center sm:justify-center">
+            <div className="flex h-[100dvh] w-full flex-col bg-white rounded-none sm:h-auto sm:max-h-[90vh] sm:max-w-2xl sm:rounded-3xl sm:border sm:border-black/10 sm:shadow-xl overflow-hidden">
+              {/* Header */}
+              <div className="shrink-0 border-b border-black/10 p-4 sm:p-5 bg-white">
+                <p className="text-xs font-medium inline-flex px-3 py-1 rounded-full bg-black text-white">
+                  Confirm Order
+                </p>
+                <h3 className="text-lg sm:text-xl font-semibold text-black mt-3">
+                  Please double-check your details
+                </h3>
+                <p className="text-sm text-black/60 mt-1">
+                  Once confirmed, your order number will be generated.
+                </p>
               </div>
 
-              <div className="rounded-2xl border border-black/10 p-4">
-                <p className="font-semibold text-black">Order Summary</p>
-                <div className="mt-3 space-y-2 text-sm max-h-44 overflow-auto pr-1">
-                  {items.map((x) => (
-                    <div key={x.id} className="flex justify-between gap-3">
-                      <span className="text-black/80">{x.name} x{x.qty}</span>
-                      <span className="text-black">Rs {Number(x.price) * Number(x.qty)}</span>
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {/* Delivery Info */}
+                  <div className="rounded-2xl border border-black/10 p-4">
+                    <p className="font-semibold text-black">Delivery Info</p>
+
+                    <div className="mt-3 grid gap-3">
+                      <InfoCard label="Name" value={form.name.trim()} />
+                      <InfoCard label="Phone" value={digitsOnly(form.phone)} />
+                      {form.altPhone.trim() ? (
+                        <InfoCard label="Optional Phone" value={digitsOnly(form.altPhone)} />
+                      ) : null}
+                      <InfoCard label="City" value={form.city.trim()} />
+                      <InfoCard label="Address" value={form.address.trim()} />
+                      {form.note.trim() ? <InfoCard label="Note" value={form.note.trim()} /> : null}
                     </div>
-                  ))}
-                </div>
+                  </div>
 
-                <div className="border-t border-black/10 my-3" />
+                  {/* Order Summary */}
+                  <div className="rounded-2xl border border-black/10 p-4">
+                    <p className="font-semibold text-black">Order Summary</p>
 
-                <div className="space-y-2 text-sm">
-                  <Row label="Subtotal" value={`Rs ${totals.subtotal}`} />
-                  <Row label="Delivery (Standard)" value={deliveryFee === 0 ? "Free" : `Rs ${deliveryFee}`} />
-                  <Row label="Final Total" value={`Rs ${finalTotal}`} strong />
+                    <div className="mt-3 space-y-2 text-sm max-h-56 overflow-auto pr-1">
+                      {items.map((x) => (
+                        <div key={x.id} className="flex justify-between gap-3">
+                          <span className="text-black/80 break-words">
+                            {x.name} x{x.qty}
+                          </span>
+                          <span className="text-black whitespace-nowrap">
+                            Rs {Number(x.price) * Number(x.qty)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="border-t border-black/10 my-3" />
+
+                    <div className="space-y-2 text-sm">
+                      <Row label="Subtotal" value={`Rs ${totals.subtotal}`} />
+                      <Row label="Delivery" value={deliveryFee === 0 ? "Free" : `Rs ${deliveryFee}`} />
+                      <div className="border-t border-black/10 my-2" />
+                      <Row label="Final Total" value={`Rs ${finalTotal}`} strong />
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="p-5 border-t border-black/10 flex flex-col sm:flex-row gap-3 justify-end">
-              <button
-                onClick={() => setShowConfirm(false)}
-                disabled={loading}
-                className="rounded-2xl px-5 py-3 text-sm font-medium border border-black/10 text-black hover:bg-black/5 transition disabled:opacity-60"
-              >
-                Edit Details
-              </button>
+              {/* Footer */}
+              <div className="shrink-0 border-t border-black/10 p-4 sm:p-5 bg-white flex flex-col sm:flex-row gap-3 justify-end">
+                <button
+                  onClick={() => setShowConfirm(false)}
+                  disabled={loading}
+                  className="rounded-2xl px-5 py-3 text-sm font-medium border border-black/10 text-black hover:bg-black/5 transition disabled:opacity-60"
+                >
+                  Edit Details
+                </button>
 
-              <button
-                onClick={confirmAndPlaceOrder}
-                disabled={loading}
-                className="rounded-2xl px-5 py-3 text-sm font-medium bg-[#b68a5a] text-black hover:opacity-90 transition disabled:opacity-60"
-              >
-                {loading ? "Placing..." : "Confirm & Place Order"}
-              </button>
+                <button
+                  onClick={confirmAndPlaceOrder}
+                  disabled={loading}
+                  className="rounded-2xl px-5 py-3 text-sm font-medium bg-[#b68a5a] text-black hover:opacity-90 transition disabled:opacity-60"
+                >
+                  {loading ? "Placing..." : "Confirm & Place Order"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -544,9 +546,11 @@ function Input({ label, hint, ...props }) {
 
 function Row({ label, value, strong }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-3">
       <p className="text-black/60">{label}</p>
-      <p className={strong ? "text-black font-semibold" : "text-black/80"}>{value}</p>
+      <p className={strong ? "text-black font-semibold whitespace-nowrap" : "text-black/80 whitespace-nowrap"}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -556,6 +560,15 @@ function Info({ label, value }) {
     <div className="flex items-start justify-between gap-3">
       <p className="text-black/60">{label}</p>
       <p className="text-black text-right break-words">{value}</p>
+    </div>
+  );
+}
+
+function InfoCard({ label, value }) {
+  return (
+    <div className="rounded-2xl border border-black/10 bg-black/[0.02] px-3 py-2">
+      <p className="text-[11px] uppercase tracking-wide text-black/50">{label}</p>
+      <p className="mt-1 text-sm text-black break-words">{value}</p>
     </div>
   );
 }
